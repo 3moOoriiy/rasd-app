@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rasd",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main.py"],
+      "cwd": "backend",
+      "port": 8765
+    }
+  ]
+}

@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>رصد — لوحة متابعة المصادر</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Cairo', 'Tajawal', sans-serif;
+    background: #0b1220;
+    color: #e2e8f0;
+    min-height: 100vh;
+    background-image:
+      radial-gradient(900px 600px at 90% 0%, rgba(93,175,163,0.10), transparent 60%),
+      radial-gradient(900px 600px at 0% 100%, rgba(192,132,252,0.08), transparent 60%);
+    background-attachment: fixed;
+  }
+  a { color: inherit; }
+
+  /* Header */
+  .top-bar {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(20px) saturate(150%);
+    background: rgba(11, 18, 32, 0.75);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    padding: 0.9rem 1.4rem;
+    display: flex; align-items: center; gap: 1rem;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 0.7rem;
+  }
+  .brand-logo {
+    width: 38px; height: 38px;
+    background: linear-gradient(135deg, #5dafa3, #38bdf8);
+    border-radius: 10px;
+    display: grid; place-items: center;
+    font-size: 1.3rem; font-weight: 800; color: #0b1220;
+  }
+  .brand-title {
+    font-size: 1.25rem; font-weight: 800; margin: 0;
+    background: linear-gradient(135deg, #5dafa3, #38bdf8);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .brand-sub { margin: 0; font-size: 0.78rem; color: #94a3b8; }
+  .top-stats { margin-inline-start: auto; display: flex; gap: 0.5rem; flex-wrap: wrap; font-size: 0.8rem; color: #94a3b8; }
+  .top-stats span { background: rgba(255,255,255,0.04); padding: 0.35rem 0.65rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); }
+  .top-stats .cached { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border-color: rgba(251,191,36,0.25); }
+
+  .container { max-width: 1600px; margin: 0 auto; padding: 1.2rem 1rem 3rem; }
+
+  /* Tabs */
+  .tabs {
+    display: flex; flex-wrap: wrap; gap: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 14px;
+    margin-bottom: 0.9rem;
+  }
+  .tab {
+    --accent: #5dafa3;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.55rem 0.95rem;
+    background: rgba(255,255,255,0.03);
+    color: #e2e8f0;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    font: inherit; font-weight: 600; font-size: 0.88rem;
+    cursor: pointer;
+    transition: all 0.18s;
+  }
+  .tab:hover { background: rgba(255,255,255,0.08); border-color: var(--accent); }
+  .tab.active {
+    background: var(--accent); color: #0b1220; border-color: var(--accent);
+    box-shadow: 0 4px 14px -4px rgba(0,0,0,0.5);
+  }
+  .tab-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.6rem; height: 1.3rem; padding: 0 0.4rem;
+    background: rgba(0,0,0,0.25); border-radius: 7px;
+    font-size: 0.72rem; font-weight: 700;
+  }
+  .tab.active .tab-count { background: rgba(11,18,32,0.25); }
+
+  /* Controls */
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 0.6rem;
+    margin-bottom: 1rem;
+  }
+  .search, .select {
+    padding: 0.6rem 0.9rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(15,23,42,0.4);
+    color: #e2e8f0;
+    font: inherit; font-size: 0.9rem;
+  }
+  .search { flex: 1; min-width: 240px; }
+  .search::placeholder { color: rgba(148,163,184,0.7); }
+  .search:focus, .select:focus { outline: none; border-color: #5dafa3; box-shadow: 0 0 0 3px rgba(93,175,163,0.18); }
+  .select { cursor: pointer; }
+  .btn {
+    padding: 0.6rem 1rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: linear-gradient(135deg, #5dafa3, #38bdf8);
+    color: #0b1220; font: inherit; font-weight: 700; cursor: pointer;
+    transition: transform 0.15s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+  /* Loading */
+  .loading { text-align: center; padding: 4rem 1rem; color: #94a3b8; }
+  .spinner {
+    width: 44px; height: 44px; margin: 0 auto 1rem;
+    border: 3px solid rgba(93,175,163,0.2); border-top-color: #5dafa3;
+    border-radius: 50%; animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .err {
+    background: rgba(239,68,68,0.1); color: #fca5a5;
+    border: 1px solid rgba(239,68,68,0.3);
+    padding: 0.8rem 1rem; border-radius: 10px;
+    margin-bottom: 1rem;
+  }
+
+  /* Grid */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(370px, 1fr));
+    gap: 1rem;
+  }
+  .card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    backdrop-filter: blur(20px) saturate(150%);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .card:hover { border-color: rgba(93,175,163,0.4); }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.85rem 1rem; gap: 0.6rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    cursor: pointer; user-select: none;
+    background: linear-gradient(90deg, rgba(93,175,163,0.06), transparent);
+  }
+  .card-head:hover { background: rgba(93,175,163,0.10); }
+  .id { display: flex; align-items: center; gap: 0.7rem; flex: 1; min-width: 0; }
+  .platform {
+    flex-shrink: 0; width: 34px; height: 34px;
+    display: grid; place-items: center; border-radius: 9px;
+    font-weight: 900;
+  }
+  .platform.x  { background: #000; color: #fff; }
+  .platform.fb { background: #1877f2; color: #fff; font-size: 1.1rem; }
+  .id-text { display: flex; flex-direction: column; min-width: 0; }
+  .id-name {
+    font-size: 0.95rem; font-weight: 700; color: #f1f5f9;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .id-handle { font-size: 0.78rem; color: #94a3b8; direction: ltr; }
+  .meta-right { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+  .count-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.6rem; height: 1.5rem; padding: 0 0.5rem;
+    background: #5dafa3; color: #0b1220;
+    border-radius: 8px; font-size: 0.8rem; font-weight: 800;
+  }
+  .chevron { color: #94a3b8; font-size: 0.85rem; }
+
+  .card-body { padding: 0.4rem 0.85rem 0.7rem; }
+  .post {
+    padding: 0.75rem 0.4rem;
+    border-bottom: 1px dashed rgba(255,255,255,0.06);
+  }
+  .post:last-child { border-bottom: none; }
+  .post-text {
+    margin: 0 0 0.55rem; font-size: 0.92rem; line-height: 1.6;
+    color: #e2e8f0; white-space: pre-wrap; word-break: break-word;
+  }
+  .post-media {
+    display: grid; gap: 0.4rem;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    margin: 0 0 0.55rem;
+  }
+  .post-media img {
+    width: 100%; max-height: 200px; object-fit: cover;
+    border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
+  }
+  .post-meta {
+    display: flex; flex-wrap: wrap; gap: 0.8rem;
+    font-size: 0.78rem; color: #94a3b8; align-items: center;
+  }
+  .post-link {
+    margin-inline-start: auto; color: #5dafa3; text-decoration: none;
+    font-size: 1.05rem;
+  }
+  .post-link:hover { color: #38bdf8; }
+
+  .fb-notice {
+    padding: 0.75rem; background: rgba(24,119,242,0.1);
+    border: 1px solid rgba(24,119,242,0.25); border-radius: 8px;
+    display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+    color: #93c5fd; font-size: 0.85rem;
+  }
+  .fb-link {
+    background: #1877f2; color: #fff !important;
+    padding: 0.32rem 0.7rem; border-radius: 6px;
+    text-decoration: none; font-size: 0.78rem; font-weight: 700;
+    white-space: nowrap;
+  }
+  .card-err {
+    margin: 0.4rem 0;
+    background: rgba(239,68,68,0.08); color: #fca5a5;
+    border: 1px solid rgba(239,68,68,0.2); border-radius: 8px;
+    padding: 0.5rem 0.7rem; font-size: 0.82rem;
+    direction: ltr; text-align: start;
+  }
+  .empty {
+    padding: 1rem 0.4rem; text-align: center;
+    color: #94a3b8; font-size: 0.85rem; opacity: 0.75;
+  }
+
+  @media (max-width: 640px) {
+    .brand-title { font-size: 1.05rem; }
+    .top-stats { display: none; }
+    .search { min-width: 100%; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useMemo } = React;
+
+// When opened via FastAPI on :8765, API is same-origin. When opened as file://,
+// fall back to localhost.
+const API_BASE = (location.protocol === 'http:' || location.protocol === 'https:')
+  ? ''  // same origin
+  : 'http://127.0.0.1:8765';
+
+const DATE_FILTERS = [
+  { v: '24h', lbl: 'آخر 24 ساعة' },
+  { v: '3d',  lbl: 'آخر 3 أيام'   },
+  { v: '7d',  lbl: 'آخر أسبوع'    },
+  { v: '30d', lbl: 'آخر شهر'      },
+  { v: '90d', lbl: 'آخر 3 شهور'   },
+  { v: 'all', lbl: 'الكل'         },
+];
+
+const fmtNum = n => {
+  n = Number(n) || 0;
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (n >= 1_000)     return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+  return String(n);
+};
+
+const fmtDate = iso => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('ar-EG', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  } catch { return iso; }
+};
+
+const truncate = (s, n) => s && s.length > n ? s.slice(0, n).trimEnd() + '…' : (s || '');
+
+function App() {
+  const [cats, setCats]           = useState([]);
+  const [activeCat, setActiveCat] = useState('all');
+  const [dateF, setDateF]         = useState('7d');
+  const [perAcc, setPerAcc]       = useState(5);
+  const [feed, setFeed]           = useState(null);
+  const [loading, setLoading]     = useState(false);
+  const [err, setErr]             = useState('');
+  const [q, setQ]                 = useState('');
+  const [collapsed, setCollapsed] = useState({});
+
+  useEffect(() => {
+    fetch(`${API_BASE}/api/categories`)
+      .then(r => r.json())
+      .then(d => setCats(d.categories || []))
+      .catch(() => setErr('تعذر الاتصال بالخادم — تأكد إن الـ backend شغّال'));
+  }, []);
+
+  const load = (force = false) => {
+    setLoading(true); setErr('');
+    const params = new URLSearchParams({
+      per_account: String(perAcc),
+      date_filter: dateF,
+      ...(activeCat !== 'all' ? { category: activeCat } : {}),
+      ...(force ? { force: '1' } : {}),
+    });
+    fetch(`${API_BASE}/api/feed?${params}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) { setErr(d.error); setFeed(null); } else setFeed(d); })
+      .catch(() => setErr('فشل تحميل الأخبار — تأكد إن الـ backend شغّال على المنفذ 8765'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(false); }, [activeCat, dateF, perAcc]);
+
+  const totalPosts = useMemo(() => {
+    if (!feed) return 0;
+    return feed.accounts.reduce((s, a) => s + (a.posts?.length || 0), 0);
+  }, [feed]);
+
+  const filtered = useMemo(() => {
+    if (!feed) return [];
+    if (!q.trim()) return feed.accounts;
+    const needle = q.trim().toLowerCase();
+    return feed.accounts.filter(a => {
+      if ((a.name_ar || '').toLowerCase().includes(needle)) return true;
+      if ((a.handle  || '').toLowerCase().includes(needle)) return true;
+      return (a.posts || []).some(p => (p.caption || '').toLowerCase().includes(needle));
+    });
+  }, [feed, q]);
+
+  const totalAcc = cats.reduce((s, c) => s + c.count, 0);
+
+  return (
+    <>
+      <div className="top-bar">
+        <div className="brand">
+          <div className="brand-logo">📡</div>
+          <div>
+            <div className="brand-title">رصد</div>
+            <p className="brand-sub">لوحة متابعة المصادر</p>
+          </div>
+        </div>
+        <div className="top-stats">
+          {feed && <>
+            <span>📊 {filtered.length} حساب</span>
+            <span>📝 {totalPosts} منشور</span>
+            <span>⏱ {feed.elapsed_sec}s</span>
+            {feed.cached && <span className="cached">💾 من الكاش</span>}
+          </>}
+        </div>
+      </div>
+
+      <div className="container">
+        <div className="tabs">
+          <button
+            className={`tab ${activeCat === 'all' ? 'active' : ''}`}
+            style={{ '--accent': '#94a3b8' }}
+            onClick={() => setActiveCat('all')}
+          >
+            الكل <span className="tab-count">{totalAcc}</span>
+          </button>
+          {cats.map(c => (
+            <button
+              key={c.id}
+              className={`tab ${activeCat === c.id ? 'active' : ''}`}
+              style={{ '--accent': c.color }}
+              onClick={() => setActiveCat(c.id)}
+            >
+              {c.name_ar} <span className="tab-count">{c.count}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="controls">
+          <input
+            className="search"
+            type="text"
+            placeholder="🔍 بحث فى الحسابات أو المنشورات..."
+            value={q}
+            onChange={e => setQ(e.target.value)}
+          />
+          <select className="select" value={dateF} onChange={e => setDateF(e.target.value)}>
+            {DATE_FILTERS.map(f => <option key={f.v} value={f.v}>{f.lbl}</option>)}
+          </select>
+          <select className="select" value={perAcc} onChange={e => setPerAcc(Number(e.target.value))}>
+            {[3, 5, 10, 15, 20].map(n => <option key={n} value={n}>{n} منشور / حساب</option>)}
+          </select>
+          <button className="btn" onClick={() => load(true)} disabled={loading}>
+            {loading ? '⏳' : '🔄'} تحديث
+          </button>
+        </div>
+
+        {err && <div className="err">⚠️ {err}</div>}
+
+        {loading && !feed && (
+          <div className="loading">
+            <div className="spinner"></div>
+            <p>جاري سحب الأخبار من المصادر...</p>
+            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>قد يستغرق 20-40 ثانية فى أول طلب</p>
+          </div>
+        )}
+
+        {feed && (
+          <div className="grid">
+            {filtered.map(acc => {
+              const isFb = acc.platform === 'fb';
+              const isCollapsed = collapsed[acc.handle];
+              const hasErr = acc.error && acc.error !== 'facebook_link_only';
+              const toggle = () => setCollapsed(p => ({ ...p, [acc.handle]: !p[acc.handle] }));
+              return (
+                <div key={acc.handle} className="card">
+                  <div className="card-head" onClick={toggle}>
+                    <div className="id">
+                      <div className={`platform ${acc.platform}`}>
+                        {acc.platform === 'x' ? '𝕏' : 'f'}
+                      </div>
+                      <div className="id-text">
+                        <div className="id-name">{acc.name_ar}</div>
+                        <div className="id-handle">@{acc.handle}</div>
+                      </div>
+                    </div>
+                    <div className="meta-right">
+                      {(acc.posts?.length || 0) > 0 && <span className="count-badge">{acc.posts.length}</span>}
+                      <span className="chevron">{isCollapsed ? '▸' : '▾'}</span>
+                    </div>
+                  </div>
+
+                  {!isCollapsed && (
+                    <div className="card-body">
+                      {isFb && (
+                        <div className="fb-notice">
+                          <span>صفحة Facebook — افتحها مباشرة</span>
+                          <a
+                            className="fb-link"
+                            href={`https://facebook.com/${acc.handle}`}
+                            target="_blank" rel="noreferrer"
+                          >🔗 فتح</a>
+                        </div>
+                      )}
+                      {hasErr && <div className="card-err">⚠️ {acc.error}</div>}
+                      {!isFb && !hasErr && (acc.posts?.length || 0) === 0 && (
+                        <div className="empty">لا منشورات فى المدة المحددة</div>
+                      )}
+                      {(acc.posts || []).map(p => (
+                        <article key={p.id || p.post_url} className="post">
+                          <p className="post-text">{truncate(p.caption, 320)}</p>
+                          {p.image_urls && p.image_urls.length > 0 && (
+                            <div className="post-media">
+                              {p.image_urls.slice(0, 4).map((u, i) => (
+                                <img key={i} src={u} alt="" loading="lazy" />
+                              ))}
+                            </div>
+                          )}
+                          <div className="post-meta">
+                            <span title={p.created_at}>📅 {fmtDate(p.created_at)}</span>
+                            <span>❤️ {fmtNum(p.likes)}</span>
+                            <span>🔁 {fmtNum(p.retweets)}</span>
+                            <span>💬 {fmtNum(p.comments)}</span>
+                            {p.views > 0 && <span>👁 {fmtNum(p.views)}</span>}
+                            {p.post_url && (
+                              <a className="post-link" href={p.post_url} target="_blank" rel="noreferrer">🔗</a>
+                            )}
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
