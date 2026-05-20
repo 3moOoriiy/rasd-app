@@ -30,7 +30,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from sources import SOURCES, categories_meta, flatten
-from x_client import fetch_user_tweets
+from x_client import fetch_user_tweets, USE_COOKIES
 
 app = FastAPI(title="Rasd Monitoring API")
 
@@ -52,7 +52,10 @@ def health():
 
 @app.get("/api/categories")
 def list_categories():
-    return {"categories": categories_meta()}
+    return {
+        "categories": categories_meta(),
+        "auth_mode": "cookies" if USE_COOKIES else "guest",
+    }
 
 
 @app.get("/api/sources")
@@ -100,7 +103,8 @@ def feed(
     category: str | None = Query(None, description="Category id (omit for all)"),
     per_account: int = Query(5, ge=1, le=20),
     date_filter: str = Query("7d", description="24h|3d|7d|30d|90d|all"),
-    parallel: int = Query(6, ge=1, le=12),
+    # Without auth cookies X rate-limits aggressively, so be polite by default.
+    parallel: int = Query(6 if USE_COOKIES else 2, ge=1, le=12),
     force: int = Query(0, description="1 = bypass 10-min cache"),
 ):
     if date_filter not in ("24h", "3d", "7d", "30d", "90d", "all"):
