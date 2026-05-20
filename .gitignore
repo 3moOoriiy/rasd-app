@@ -2,6 +2,9 @@
 .env
 backend/.env
 
+# FB session cookies (saved after first manual login)
+backend/fb_cookies.json
+
 # Python
 __pycache__/
 *.pyc

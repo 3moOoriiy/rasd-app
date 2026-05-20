@@ -267,30 +267,6 @@
     display: inline-block;
   }
 
-  /* ---------- Guest-mode banner ---------- */
-  .guest-banner {
-    display: flex; align-items: center; justify-content: space-between; gap: 0.7rem;
-    margin-bottom: 1rem;
-    padding: 0.75rem 1rem;
-    background: rgba(251, 191, 36, 0.10);
-    border: 1px solid rgba(251, 191, 36, 0.30);
-    border-radius: 10px;
-    color: #fcd34d;
-    font-size: 0.88rem;
-    line-height: 1.55;
-  }
-  .guest-banner code {
-    background: rgba(0,0,0,0.35); padding: 1px 6px; border-radius: 4px;
-    font-size: 0.82rem; direction: ltr;
-  }
-  .guest-banner-close {
-    background: transparent; color: #fcd34d;
-    border: 1px solid rgba(251, 191, 36, 0.35); border-radius: 6px;
-    width: 28px; height: 28px; line-height: 1; cursor: pointer;
-    font-size: 1.1rem; flex-shrink: 0;
-  }
-  .guest-banner-close:hover { background: rgba(251,191,36,0.18); }
-
   /* ---------- Inline export buttons (in the top stats bar) ---------- */
   .top-export {
     font: inherit;
@@ -323,7 +299,7 @@
       background-image: none !important;
     }
     .top-bar, .tabs, .controls, .top-stats, .err, .loading,
-    .chevron, .fb-link, .guest-banner {
+    .chevron, .fb-link {
       display: none !important;
     }
     body::before {
@@ -435,10 +411,6 @@ const extractHandle = input => {
 
 function App() {
   const [cats, setCats]           = useState([]);
-  const [authMode, setAuthMode]   = useState('');
-  const [bannerDismissed, setBannerDismissed] = useState(
-    () => localStorage.getItem('rasd_banner_dismissed') === '1'
-  );
   const [sources, setSources]     = useState([]);     // all configured accounts (no posts yet)
   const [accountState, setAccountState] = useState({}); // handle -> { loading, posts, error, ts }
   const [activeCat, setActiveCat] = useState('all');
@@ -457,15 +429,9 @@ function App() {
       fetch(`${API_BASE}/api/sources`).then(r => r.json()),
     ]).then(([catsRes, srcRes]) => {
       setCats(catsRes.categories || []);
-      setAuthMode(catsRes.auth_mode || '');
       setSources(srcRes.sources || []);
     }).catch(() => setErr('تعذر الاتصال بالخادم — تأكد إن الـ backend شغّال'));
   }, []);
-
-  const dismissBanner = () => {
-    setBannerDismissed(true);
-    localStorage.setItem('rasd_banner_dismissed', '1');
-  };
 
   // Fetch posts for one account on demand. Never auto-fanned-out across
   // all configured sources — that's what triggered X rate limits.
@@ -646,14 +612,6 @@ function App() {
       </div>
 
       <div className="container">
-        {authMode === 'guest' && !bannerDismissed && (
-          <div className="guest-banner">
-            <div className="guest-banner-text">
-              <strong>⚠️ وضع Guest:</strong> X بيحط rate limit صارمة عشان مفيش كوكيز. لو شفت أخطاء "rate limited" متكررة، ضيف كوكيز حسابك فى <code>backend/.env</code> (تفاصيل فى README).
-            </div>
-            <button className="guest-banner-close" onClick={dismissBanner} title="إخفاء">×</button>
-          </div>
-        )}
         <div className="tabs">
           <button
             className={`tab ${activeCat === 'all' ? 'active' : ''}`}
@@ -709,7 +667,8 @@ function App() {
               const isLoading   = !!state?.loading;
               const isLoaded    = state?.posts !== undefined;
               const posts       = state?.posts || [];
-              const hasErr      = !!(state?.error) && state.error !== 'facebook_blocks_scraping';
+              const hasErr      = !!(state?.error) && state.error !== 'facebook_not_configured';
+              const fbNotConfigured = isFb && state?.error === 'facebook_not_configured';
               return (
                 <div key={acc.handle} className={`card ${isLoaded ? 'card-loaded' : 'card-idle'}`}>
                   <div className="card-head" onClick={() => onCardHeadClick(acc)}>
@@ -744,9 +703,9 @@ function App() {
 
                   {!isCollapsed && (
                     <div className="card-body">
-                      {isFb && (
+                      {fbNotConfigured && (
                         <div className="fb-notice">
-                          <span>Facebook بقى يمنع السحب — افتحها مباشرة</span>
+                          <span>FB غير مفعّل — أضف <code>FB_EMAIL</code> و <code>FB_PASSWORD</code> فى backend/.env</span>
                           <a
                             className="fb-link"
                             href={profileUrl(acc)}
@@ -755,14 +714,14 @@ function App() {
                         </div>
                       )}
                       {hasErr && <div className="card-err">⚠️ {state.error}</div>}
-                      {!isFb && isLoaded && !hasErr && posts.length === 0 && (
-                        <div className="empty">لا منشورات فى المدة المحددة</div>
+                      {isLoaded && !hasErr && !fbNotConfigured && posts.length === 0 && (
+                        <div className="empty">لا منشورات</div>
                       )}
-                      {!isFb && !isLoaded && !isLoading && (
+                      {!isLoaded && !isLoading && (
                         <div className="empty">اضغط على رأس الكارد لتحميل آخر منشورات هذا الحساب</div>
                       )}
-                      {!isFb && isLoading && (
-                        <div className="empty">⏳ جارى التحميل...</div>
+                      {isLoading && (
+                        <div className="empty">⏳ جارى التحميل... {isFb && '(Facebook قد يأخذ 20-30 ثانية بسبب Selenium)'}</div>
                       )}
                       {posts.map(p => (
                         <article key={p.id || p.post_url} className="post">

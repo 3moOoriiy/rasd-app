@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 
 from sources import SOURCES, categories_meta, flatten
 from x_client import fetch_user_tweets, USE_COOKIES
+from fb_client import fetch_fb_posts, FB_AVAILABLE, shutdown as fb_shutdown
 
 app = FastAPI(title="Rasd Monitoring API")
 
@@ -47,15 +48,22 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "rasd-monitoring"}
+    return {
+        "status": "ok",
+        "service": "rasd-monitoring",
+        "x_auth": "cookies" if USE_COOKIES else "guest",
+        "fb": "selenium" if FB_AVAILABLE else "disabled",
+    }
+
+
+@app.on_event("shutdown")
+def _on_shutdown():
+    fb_shutdown()
 
 
 @app.get("/api/categories")
 def list_categories():
-    return {
-        "categories": categories_meta(),
-        "auth_mode": "cookies" if USE_COOKIES else "guest",
-    }
+    return {"categories": categories_meta()}
 
 
 @app.get("/api/sources")
@@ -82,21 +90,24 @@ def fetch_one_account(
         date_filter = "all"
 
     if platform == "fb":
-        # Facebook now blocks unauthenticated scraping at the platform level
-        # (both mbasic.facebook.com and www.facebook.com return error pages
-        # without a logged-in session). We surface a clear message so the
-        # UI can render a "open page" fallback.
+        if not FB_AVAILABLE:
+            # Without FB_EMAIL/FB_PASSWORD configured, fall back to a
+            # "open the page directly" hint — Facebook now blocks all
+            # unauthenticated scraping at the platform level.
+            return {
+                "handle": handle, "platform": "fb", "posts": [],
+                "error": "facebook_not_configured",
+            }
+        res = fetch_fb_posts(handle, limit=per_account)
         return {
-            "handle": handle,
-            "platform": "fb",
-            "posts": [],
-            "error": "facebook_blocks_scraping",
+            "handle": handle, "platform": "fb",
+            "posts": res.get("posts") or [],
+            "error": res.get("error"),
         }
 
     res = fetch_user_tweets(handle, limit=per_account, date_filter=date_filter)
     return {
-        "handle": handle,
-        "platform": "x",
+        "handle": handle, "platform": "x",
         "posts": res.get("posts") or [],
         "error": res.get("error"),
     }
