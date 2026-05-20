@@ -105,7 +105,27 @@ def _session():
 # ---------------------- rate limiting ----------------------
 _LAST = 0.0
 _LAST_LOCK = threading.Lock()
-_MIN_DELAY = 0.3
+# Guest tokens get a much smaller bucket than authenticated sessions, so be
+# polite when we don't have cookies.
+_MIN_DELAY = 0.3 if USE_COOKIES else 1.5
+
+# Global cooldown: when X returns 429 we stop making requests for a few
+# minutes so we don't keep poking a closed door (and don't waste the user's
+# request budget).
+_COOLDOWN_UNTIL = 0.0
+_COOLDOWN_LOCK = threading.Lock()
+_COOLDOWN_SECONDS = 300  # 5 min
+
+
+def _cooldown_remaining():
+    """Seconds until the global rate-limit cooldown expires, or 0 if not active."""
+    return max(0, _COOLDOWN_UNTIL - time.time())
+
+
+def _trip_cooldown():
+    global _COOLDOWN_UNTIL
+    with _COOLDOWN_LOCK:
+        _COOLDOWN_UNTIL = time.time() + _COOLDOWN_SECONDS
 
 
 def _throttle():
@@ -270,6 +290,12 @@ def fetch_user_tweets(screen_name, limit=5, date_filter="7d"):
     if cached:
         return cached
 
+    # Global cooldown — short-circuit when X recently rate-limited us so we
+    # don't waste request budget hammering a closed door.
+    wait = _cooldown_remaining()
+    if wait > 0:
+        return {"error": f"rate limited by X — retry in {int(wait)}s", "posts": []}
+
     rest_id = _resolve_user_id(screen_name)
     if rest_id == "_unavailable_":
         payload = {"error": "account unavailable", "posts": []}
@@ -321,7 +347,13 @@ def fetch_user_tweets(screen_name, limit=5, date_filter="7d"):
     try:
         r = _session().get(url, timeout=25)
         if r.status_code == 429:
-            return {"error": "rate limited by X, try again later", "posts": []}
+            # Trip the global cooldown so the remaining in-flight fan-out
+            # stops adding to the pile. Also refresh the guest token —
+            # sometimes a new one gets a new bucket.
+            _trip_cooldown()
+            if not USE_COOKIES:
+                get_guest_token(force=True)
+            return {"error": "rate limited by X — cooling down", "posts": []}
         if r.status_code != 200:
             return {"error": f"http {r.status_code}", "posts": []}
         data = r.json()
@@ -378,5 +410,8 @@ def fetch_user_tweets(screen_name, limit=5, date_filter="7d"):
         print(f"[x_client] parse error for @{screen_name}: {e}")
 
     payload = {"posts": posts, "error": None}
-    _cache_set(_TWEETS_CACHE, cache_key, payload)
+    if posts:
+        # Only cache non-empty results — caching empty hides transient
+        # rate-limits and parse failures for the full 15-min TTL.
+        _cache_set(_TWEETS_CACHE, cache_key, payload)
     return payload

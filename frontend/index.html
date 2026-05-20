@@ -170,6 +170,16 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .id-handle { font-size: 0.78rem; color: #94a3b8; direction: ltr; }
+  .id-url {
+    font-size: 0.74rem;
+    color: #64748b;
+    direction: ltr;
+    text-decoration: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 100%;
+    margin-top: 0.1rem;
+  }
+  .id-url:hover { color: #5dafa3; text-decoration: underline; }
   .meta-right { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
   .count-badge {
     display: inline-flex; align-items: center; justify-content: center;
@@ -234,9 +244,106 @@
 
   @media (max-width: 640px) {
     .brand-title { font-size: 1.05rem; }
-    .top-stats { display: none; }
+    /* Hide stat pills on mobile but keep the export buttons reachable */
+    .top-stats span { display: none; }
+    .top-stats { gap: 0.35rem; }
     .search { min-width: 100%; }
     .grid { grid-template-columns: 1fr; }
+  }
+
+  /* ---------- Per-card idle / loading state ---------- */
+  .card-idle .card-head { background: linear-gradient(90deg, rgba(255,255,255,0.02), transparent); }
+  .card-loaded .card-head { background: linear-gradient(90deg, rgba(93,175,163,0.10), transparent); }
+  .load-hint {
+    font-size: 0.72rem; color: #64748b; padding: 0.18rem 0.5rem;
+    border: 1px dashed rgba(255,255,255,0.15); border-radius: 6px;
+    white-space: nowrap;
+  }
+  .card-spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(93,175,163,0.3); border-top-color: #5dafa3;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+
+  /* ---------- Inline export buttons (in the top stats bar) ---------- */
+  .top-export {
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 700;
+    padding: 0.35rem 0.7rem;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.12s;
+  }
+  .top-export:hover { transform: translateY(-1px); }
+  .top-export-csv {
+    background: rgba(34,197,94,0.15);
+    color: #86efac;
+    border: 1px solid rgba(34,197,94,0.35);
+  }
+  .top-export-csv:hover { background: rgba(34,197,94,0.25); }
+  .top-export-pdf {
+    background: rgba(239,68,68,0.15);
+    color: #fca5a5;
+    border: 1px solid rgba(239,68,68,0.35);
+  }
+  .top-export-pdf:hover { background: rgba(239,68,68,0.25); }
+
+  /* ---------- Print stylesheet (PDF export) ---------- */
+  @media print {
+    @page { size: A4; margin: 1.2cm; }
+    body {
+      background: #fff !important; color: #000 !important;
+      background-image: none !important;
+    }
+    .top-bar, .tabs, .controls, .top-stats, .err, .loading,
+    .chevron, .fb-link {
+      display: none !important;
+    }
+    body::before {
+      content: "تقرير رصد المصادر — " attr(data-print-cat) " — " attr(data-print-date);
+      display: block;
+      text-align: center;
+      font-size: 16pt;
+      font-weight: 800;
+      padding-bottom: 10pt;
+      margin-bottom: 14pt;
+      border-bottom: 2px solid #5dafa3;
+      color: #0f172a;
+    }
+    .container { padding: 0 !important; max-width: 100% !important; }
+    .grid { display: block !important; }
+    .card {
+      background: #fff !important;
+      border: 1px solid #cbd5e1 !important;
+      box-shadow: none !important;
+      backdrop-filter: none !important;
+      page-break-inside: avoid;
+      margin-bottom: 10pt;
+    }
+    .card-head {
+      background: #f1f5f9 !important;
+      cursor: default !important;
+      border-bottom: 1px solid #cbd5e1 !important;
+    }
+    .id-name { color: #0f172a !important; font-size: 11pt; }
+    .id-handle, .id-url { color: #475569 !important; }
+    .id-url { text-decoration: none !important; }
+    .platform.x { background: #000 !important; color: #fff !important; }
+    .platform.fb { background: #1877f2 !important; color: #fff !important; }
+    .card-body { display: block !important; }
+    .post { border-bottom: 1px dashed #cbd5e1 !important; padding: 8pt 4pt; }
+    .post-text { color: #0f172a !important; font-size: 10.5pt; line-height: 1.7; }
+    .post-meta { color: #475569 !important; font-size: 9pt; }
+    .post-link { color: #1d4ed8 !important; }
+    .post-media img { max-height: 120pt; }
+    .count-badge { background: #5dafa3 !important; color: #fff !important; }
+    .fb-notice {
+      background: #eff6ff !important; color: #1e3a8a !important;
+      border: 1px solid #bfdbfe !important;
+    }
   }
 </style>
 </head>
@@ -244,7 +351,7 @@
 <div id="root"></div>
 
 <script type="text/babel" data-presets="env,react">
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 // When opened via FastAPI on :8765, API is same-origin. When opened as file://,
 // fall back to localhost.
@@ -278,58 +385,202 @@ const fmtDate = iso => {
 
 const truncate = (s, n) => s && s.length > n ? s.slice(0, n).trimEnd() + '…' : (s || '');
 
+// Build the canonical profile URL for an account. Facebook numeric IDs need
+// the `profile.php?id=` form; everything else uses the slug directly.
+const profileUrl = acc => {
+  if (!acc?.handle) return '';
+  if (acc.platform === 'fb') {
+    return /^\d+$/.test(acc.handle)
+      ? `https://facebook.com/profile.php?id=${acc.handle}`
+      : `https://facebook.com/${acc.handle}`;
+  }
+  return `https://x.com/${acc.handle}`;
+};
+
+// Extract a handle from a pasted profile URL, or return the input unchanged
+// if it doesn't look like a URL. Handles x.com, twitter.com, facebook.com
+// (both slug and profile.php?id=NUM forms), and fb.com.
+const extractHandle = input => {
+  if (!input) return '';
+  const s = input.trim();
+  const fbId = s.match(/[?&]id=(\d+)/i);
+  if (fbId) return fbId[1];
+  const urlMatch = s.match(/(?:x\.com|twitter\.com|facebook\.com|fb\.com)\/([^/?&#\s]+)/i);
+  return urlMatch ? urlMatch[1] : s;
+};
+
 function App() {
   const [cats, setCats]           = useState([]);
+  const [sources, setSources]     = useState([]);     // all configured accounts (no posts yet)
+  const [accountState, setAccountState] = useState({}); // handle -> { loading, posts, error, ts }
   const [activeCat, setActiveCat] = useState('all');
-  const [dateF, setDateF]         = useState('7d');
+  const [dateF, setDateF]         = useState('all');
   const [perAcc, setPerAcc]       = useState(5);
-  const [feed, setFeed]           = useState(null);
-  const [loading, setLoading]     = useState(false);
   const [err, setErr]             = useState('');
   const [q, setQ]                 = useState('');
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed, setCollapsed] = useState({});     // handle -> bool
 
+  // On mount: load categories + the full sources list. NO posts are fetched
+  // — every card starts idle. The user expands a card (or pastes a URL) to
+  // trigger a single-account fetch.
   useEffect(() => {
-    fetch(`${API_BASE}/api/categories`)
-      .then(r => r.json())
-      .then(d => setCats(d.categories || []))
-      .catch(() => setErr('تعذر الاتصال بالخادم — تأكد إن الـ backend شغّال'));
+    Promise.all([
+      fetch(`${API_BASE}/api/categories`).then(r => r.json()),
+      fetch(`${API_BASE}/api/sources`).then(r => r.json()),
+    ]).then(([catsRes, srcRes]) => {
+      setCats(catsRes.categories || []);
+      setSources(srcRes.sources || []);
+    }).catch(() => setErr('تعذر الاتصال بالخادم — تأكد إن الـ backend شغّال'));
   }, []);
 
-  const load = (force = false) => {
-    setLoading(true); setErr('');
+  // Fetch posts for one account on demand. Never auto-fanned-out across
+  // all configured sources — that's what triggered X rate limits.
+  const loadAccount = (acc) => {
+    if (!acc?.handle) return;
+    setAccountState(s => ({ ...s, [acc.handle]: { ...(s[acc.handle] || {}), loading: true, error: null } }));
     const params = new URLSearchParams({
-      per_account: String(perAcc),
-      date_filter: dateF,
-      ...(activeCat !== 'all' ? { category: activeCat } : {}),
-      ...(force ? { force: '1' } : {}),
+      handle: acc.handle, platform: acc.platform,
+      per_account: String(perAcc), date_filter: dateF,
     });
-    fetch(`${API_BASE}/api/feed?${params}`)
+    fetch(`${API_BASE}/api/account?${params}`)
       .then(r => r.json())
-      .then(d => { if (d.error) { setErr(d.error); setFeed(null); } else setFeed(d); })
-      .catch(() => setErr('فشل تحميل الأخبار — تأكد إن الـ backend شغّال على المنفذ 8765'))
-      .finally(() => setLoading(false));
+      .then(d => setAccountState(s => ({
+        ...s,
+        [acc.handle]: { loading: false, posts: d.posts || [], error: d.error || null, ts: Date.now() },
+      })))
+      .catch(() => setAccountState(s => ({
+        ...s,
+        [acc.handle]: { loading: false, posts: [], error: 'فشل الاتصال بالخادم', ts: Date.now() },
+      })));
   };
 
-  useEffect(() => { load(false); }, [activeCat, dateF, perAcc]);
+  // Re-fetch only the already-loaded cards when filter knobs change. Idle
+  // cards stay idle — the user might never want them loaded.
+  const reloadLoaded = () => {
+    Object.entries(accountState).forEach(([handle, st]) => {
+      if (st?.posts !== undefined && !st.loading) {
+        const acc = sources.find(s => s.handle === handle);
+        if (acc) loadAccount(acc);
+      }
+    });
+  };
+  // Sequence the reload via a ref so we don't re-run when accountState mutates
+  // during the loop itself.
+  const filtersRef = useRef({ dateF, perAcc });
+  useEffect(() => {
+    if (filtersRef.current.dateF !== dateF || filtersRef.current.perAcc !== perAcc) {
+      filtersRef.current = { dateF, perAcc };
+      reloadLoaded();
+    }
+  }, [dateF, perAcc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const totalPosts = useMemo(() => {
-    if (!feed) return 0;
-    return feed.accounts.reduce((s, a) => s + (a.posts?.length || 0), 0);
-  }, [feed]);
+  // URL-paste auto-load: when the user pastes a profile URL that exactly
+  // matches one of our sources, fetch it automatically.
+  useEffect(() => {
+    if (!q.trim() || !sources.length) return;
+    const fromUrl = extractHandle(q).toLowerCase();
+    if (!fromUrl) return;
+    const match = sources.find(s => s.handle.toLowerCase() === fromUrl);
+    if (match && !accountState[match.handle]) {
+      loadAccount(match);
+      setCollapsed(c => ({ ...c, [match.handle]: false }));
+    }
+  }, [q, sources]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = useMemo(() => {
-    if (!feed) return [];
-    if (!q.trim()) return feed.accounts;
-    const needle = q.trim().toLowerCase();
-    return feed.accounts.filter(a => {
-      if ((a.name_ar || '').toLowerCase().includes(needle)) return true;
-      if ((a.handle  || '').toLowerCase().includes(needle)) return true;
-      return (a.posts || []).some(p => (p.caption || '').toLowerCase().includes(needle));
+    let result = activeCat === 'all'
+      ? sources
+      : sources.filter(s => s.category === activeCat);
+    if (!q.trim()) return result;
+    const rawNeedle = q.trim().toLowerCase();
+    const fromUrl = extractHandle(q).toLowerCase();
+    return result.filter(a => {
+      const name   = (a.name_ar || '').toLowerCase();
+      const handle = (a.handle  || '').toLowerCase();
+      if (name.includes(rawNeedle))   return true;
+      if (handle.includes(rawNeedle)) return true;
+      if (handle && fromUrl === handle) return true;
+      if (handle && rawNeedle.includes(handle)) return true;
+      const posts = accountState[a.handle]?.posts || [];
+      return posts.some(p => (p.caption || '').toLowerCase().includes(rawNeedle));
     });
-  }, [feed, q]);
+  }, [sources, activeCat, q, accountState]);
+
+  const loadedCount = filtered.filter(a => accountState[a.handle]?.posts?.length).length;
+  const totalPosts = filtered.reduce(
+    (s, a) => s + (accountState[a.handle]?.posts?.length || 0),
+    0
+  );
 
   const totalAcc = cats.reduce((s, c) => s + c.count, 0);
+
+  // Click on card header: expand and load (if idle), or toggle (if loaded).
+  const onCardHeadClick = (acc) => {
+    const st = accountState[acc.handle];
+    if (!st || (st.posts === undefined && !st.loading)) {
+      loadAccount(acc);
+      setCollapsed(c => ({ ...c, [acc.handle]: false }));
+    } else {
+      setCollapsed(c => ({ ...c, [acc.handle]: !c[acc.handle] }));
+    }
+  };
+
+  // ---------------------- Export helpers ----------------------
+  const exportFileBase = () => {
+    const cat = cats.find(c => c.id === activeCat);
+    const catName = cat ? cat.name_ar : 'الكل';
+    return `rasd-${catName}-${new Date().toISOString().slice(0, 10)}`;
+  };
+
+  const downloadCSV = () => {
+    if (!filtered.length) return;
+    const headers = [
+      'الفئة', 'الحساب', 'اليوزر', 'المنصة', 'لينك البروفايل',
+      'تاريخ النشر', 'النص', 'إعجابات', 'إعادة تغريد', 'تعليقات', 'مشاهدات',
+      'لينك المنشور',
+    ];
+    const rows = [];
+    for (const acc of filtered) {
+      const accUrl = profileUrl(acc);
+      const platform = acc.platform === 'x' ? 'X' : 'Facebook';
+      const posts = accountState[acc.handle]?.posts || [];
+      if (!posts.length) {
+        rows.push([acc.category_name_ar || '', acc.name_ar, acc.handle, platform, accUrl,
+                   '', '(لم يُحمَّل)', 0, 0, 0, 0, '']);
+        continue;
+      }
+      for (const post of posts) {
+        rows.push([
+          acc.category_name_ar || '',
+          acc.name_ar, acc.handle, platform, accUrl,
+          post.created_at || '',
+          post.caption || '',
+          post.likes || 0, post.retweets || 0, post.comments || 0, post.views || 0,
+          post.post_url || '',
+        ]);
+      }
+    }
+    const esc = c => `"${String(c).replace(/"/g, '""')}"`;
+    const BOM = String.fromCharCode(0xFEFF);  // Excel needs UTF-8 BOM to render Arabic
+    const csv = BOM + [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${exportFileBase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  };
+
+  const downloadPDF = () => {
+    // Expand all cards so they all print, then open the print dialog
+    setCollapsed({});
+    const cat = cats.find(c => c.id === activeCat);
+    document.body.setAttribute('data-print-cat', cat ? cat.name_ar : 'كل المصادر');
+    document.body.setAttribute('data-print-date', new Date().toLocaleDateString('ar-EG'));
+    // Two RAFs to ensure React re-rendered the expanded cards before printing
+    requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+  };
 
   return (
     <>
@@ -342,11 +593,20 @@ function App() {
           </div>
         </div>
         <div className="top-stats">
-          {feed && <>
+          {sources.length > 0 && <>
             <span>📊 {filtered.length} حساب</span>
+            <span>✅ {loadedCount} محمَّل</span>
             <span>📝 {totalPosts} منشور</span>
-            <span>⏱ {feed.elapsed_sec}s</span>
-            {feed.cached && <span className="cached">💾 من الكاش</span>}
+            {loadedCount > 0 && (
+              <>
+                <button className="top-export top-export-csv" onClick={downloadCSV} title="تنزيل CSV">
+                  📊 CSV
+                </button>
+                <button className="top-export top-export-pdf" onClick={downloadPDF} title="فتح حوار الطباعة (احفظ كـ PDF)">
+                  📄 PDF
+                </button>
+              </>
+            )}
           </>}
         </div>
       </div>
@@ -376,7 +636,7 @@ function App() {
           <input
             className="search"
             type="text"
-            placeholder="🔍 بحث فى الحسابات أو المنشورات..."
+            placeholder="🔍 الصق لينك حساب أو ابحث بالاسم..."
             value={q}
             onChange={e => setQ(e.target.value)}
           />
@@ -386,31 +646,33 @@ function App() {
           <select className="select" value={perAcc} onChange={e => setPerAcc(Number(e.target.value))}>
             {[3, 5, 10, 15, 20].map(n => <option key={n} value={n}>{n} منشور / حساب</option>)}
           </select>
-          <button className="btn" onClick={() => load(true)} disabled={loading}>
-            {loading ? '⏳' : '🔄'} تحديث
+          <button
+            className="btn"
+            onClick={() => reloadLoaded()}
+            disabled={loadedCount === 0}
+            title="إعادة تحميل الحسابات المفتوحة فقط"
+          >
+            🔄 تحديث المفتوح
           </button>
         </div>
 
         {err && <div className="err">⚠️ {err}</div>}
 
-        {loading && !feed && (
-          <div className="loading">
-            <div className="spinner"></div>
-            <p>جاري سحب الأخبار من المصادر...</p>
-            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>قد يستغرق 20-40 ثانية فى أول طلب</p>
-          </div>
-        )}
-
-        {feed && (
+        {sources.length > 0 && (
           <div className="grid">
             {filtered.map(acc => {
-              const isFb = acc.platform === 'fb';
+              const isFb        = acc.platform === 'fb';
               const isCollapsed = collapsed[acc.handle];
-              const hasErr = acc.error && acc.error !== 'facebook_link_only';
-              const toggle = () => setCollapsed(p => ({ ...p, [acc.handle]: !p[acc.handle] }));
+              const state       = accountState[acc.handle];
+              const isLoading   = !!state?.loading;
+              const isLoaded    = state?.posts !== undefined;
+              const posts       = state?.posts || [];
+              const fbFallbackErrors = ['facebook_not_configured', 'facebook_returned_empty', 'facebook_login_failed'];
+              const fbFallback  = isFb && fbFallbackErrors.includes(state?.error);
+              const hasErr      = !!(state?.error) && !fbFallback;
               return (
-                <div key={acc.handle} className="card">
-                  <div className="card-head" onClick={toggle}>
+                <div key={acc.handle} className={`card ${isLoaded ? 'card-loaded' : 'card-idle'}`}>
+                  <div className="card-head" onClick={() => onCardHeadClick(acc)}>
                     <div className="id">
                       <div className={`platform ${acc.platform}`}>
                         {acc.platform === 'x' ? '𝕏' : 'f'}
@@ -418,31 +680,51 @@ function App() {
                       <div className="id-text">
                         <div className="id-name">{acc.name_ar}</div>
                         <div className="id-handle">@{acc.handle}</div>
+                        <a
+                          className="id-url"
+                          href={profileUrl(acc)}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          title={profileUrl(acc)}
+                        >
+                          🔗 {profileUrl(acc).replace(/^https?:\/\//, '')}
+                        </a>
                       </div>
                     </div>
                     <div className="meta-right">
-                      {(acc.posts?.length || 0) > 0 && <span className="count-badge">{acc.posts.length}</span>}
+                      {isLoading && <span className="card-spinner" />}
+                      {!isLoading && posts.length > 0 && <span className="count-badge">{posts.length}</span>}
+                      {!isLoading && !isLoaded && !isFb && (
+                        <span className="load-hint">⬇ اضغط للتحميل</span>
+                      )}
                       <span className="chevron">{isCollapsed ? '▸' : '▾'}</span>
                     </div>
                   </div>
 
                   {!isCollapsed && (
                     <div className="card-body">
-                      {isFb && (
+                      {fbFallback && (
                         <div className="fb-notice">
-                          <span>صفحة Facebook — افتحها مباشرة</span>
+                          <span>Facebook بيمنع السحب الآلى — افتح الصفحة مباشرة</span>
                           <a
                             className="fb-link"
-                            href={`https://facebook.com/${acc.handle}`}
+                            href={profileUrl(acc)}
                             target="_blank" rel="noreferrer"
                           >🔗 فتح</a>
                         </div>
                       )}
-                      {hasErr && <div className="card-err">⚠️ {acc.error}</div>}
-                      {!isFb && !hasErr && (acc.posts?.length || 0) === 0 && (
-                        <div className="empty">لا منشورات فى المدة المحددة</div>
+                      {hasErr && <div className="card-err">⚠️ {state.error}</div>}
+                      {isLoaded && !hasErr && !fbFallback && posts.length === 0 && (
+                        <div className="empty">لا منشورات</div>
                       )}
-                      {(acc.posts || []).map(p => (
+                      {!isLoaded && !isLoading && (
+                        <div className="empty">اضغط على رأس الكارد لتحميل آخر منشورات هذا الحساب</div>
+                      )}
+                      {isLoading && (
+                        <div className="empty">⏳ جارى التحميل... {isFb && '(Facebook قد يأخذ 20-30 ثانية بسبب Selenium)'}</div>
+                      )}
+                      {posts.map(p => (
                         <article key={p.id || p.post_url} className="post">
                           <p className="post-text">{truncate(p.caption, 320)}</p>
                           {p.image_urls && p.image_urls.length > 0 && (
@@ -471,6 +753,7 @@ function App() {
             })}
           </div>
         )}
+
       </div>
     </>
   );

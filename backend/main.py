@@ -30,7 +30,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from sources import SOURCES, categories_meta, flatten
-from x_client import fetch_user_tweets
+from x_client import fetch_user_tweets, USE_COOKIES
+from fb_client import fetch_fb_posts, FB_AVAILABLE, shutdown as fb_shutdown
 
 app = FastAPI(title="Rasd Monitoring API")
 
@@ -47,7 +48,17 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "rasd-monitoring"}
+    return {
+        "status": "ok",
+        "service": "rasd-monitoring",
+        "x_auth": "cookies" if USE_COOKIES else "guest",
+        "fb": "selenium" if FB_AVAILABLE else "disabled",
+    }
+
+
+@app.on_event("shutdown")
+def _on_shutdown():
+    fb_shutdown()
 
 
 @app.get("/api/categories")
@@ -59,6 +70,47 @@ def list_categories():
 def list_sources(category: str | None = Query(None)):
     cats = [category] if category else None
     return {"sources": flatten(categories=cats)}
+
+
+# ---------------------- single-account fetch ----------------------
+@app.get("/api/account")
+def fetch_one_account(
+    handle: str = Query(..., description="X username or FB page slug/id"),
+    platform: str = Query("x", description="x | fb"),
+    per_account: int = Query(5, ge=1, le=20),
+    date_filter: str = Query("all", description="24h|3d|7d|30d|90d|all"),
+):
+    """Fetch one account's posts. Designed for on-demand click-to-load UX
+    instead of fanning out across all 41+ configured sources at once."""
+    handle = handle.strip().lstrip("@")
+    if not handle:
+        return {"error": "empty handle", "posts": []}
+
+    if date_filter not in ("24h", "3d", "7d", "30d", "90d", "all"):
+        date_filter = "all"
+
+    if platform == "fb":
+        if not FB_AVAILABLE:
+            # Without FB_EMAIL/FB_PASSWORD configured, fall back to a
+            # "open the page directly" hint — Facebook now blocks all
+            # unauthenticated scraping at the platform level.
+            return {
+                "handle": handle, "platform": "fb", "posts": [],
+                "error": "facebook_not_configured",
+            }
+        res = fetch_fb_posts(handle, limit=per_account)
+        return {
+            "handle": handle, "platform": "fb",
+            "posts": res.get("posts") or [],
+            "error": res.get("error"),
+        }
+
+    res = fetch_user_tweets(handle, limit=per_account, date_filter=date_filter)
+    return {
+        "handle": handle, "platform": "x",
+        "posts": res.get("posts") or [],
+        "error": res.get("error"),
+    }
 
 
 # ---------------------- aggregated feed ----------------------
@@ -100,7 +152,8 @@ def feed(
     category: str | None = Query(None, description="Category id (omit for all)"),
     per_account: int = Query(5, ge=1, le=20),
     date_filter: str = Query("7d", description="24h|3d|7d|30d|90d|all"),
-    parallel: int = Query(6, ge=1, le=12),
+    # Without auth cookies X rate-limits aggressively, so be polite by default.
+    parallel: int = Query(6 if USE_COOKIES else 2, ge=1, le=12),
     force: int = Query(0, description="1 = bypass 10-min cache"),
 ):
     if date_filter not in ("24h", "3d", "7d", "30d", "90d", "all"):
