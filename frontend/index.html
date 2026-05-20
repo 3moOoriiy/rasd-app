@@ -170,12 +170,16 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .id-handle { font-size: 0.78rem; color: #94a3b8; direction: ltr; }
-  .id-handle-link {
+  .id-url {
+    font-size: 0.74rem;
+    color: #64748b;
+    direction: ltr;
     text-decoration: none;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     max-width: 100%;
+    margin-top: 0.1rem;
   }
-  .id-handle-link:hover { color: #5dafa3; text-decoration: underline; }
+  .id-url:hover { color: #5dafa3; text-decoration: underline; }
   .meta-right { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
   .count-badge {
     display: inline-flex; align-items: center; justify-content: center;
@@ -453,15 +457,16 @@ function App() {
                       </div>
                       <div className="id-text">
                         <div className="id-name">{acc.name_ar}</div>
+                        <div className="id-handle">@{acc.handle}</div>
                         <a
-                          className="id-handle id-handle-link"
+                          className="id-url"
                           href={profileUrl(acc)}
                           target="_blank"
                           rel="noreferrer"
                           onClick={e => e.stopPropagation()}
                           title={profileUrl(acc)}
                         >
-                          {profileUrl(acc).replace(/^https?:\/\//, '')}
+                          🔗 {profileUrl(acc).replace(/^https?:\/\//, '')}
                         </a>
                       </div>
                     </div>
