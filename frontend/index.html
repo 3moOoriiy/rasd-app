@@ -667,8 +667,9 @@ function App() {
               const isLoading   = !!state?.loading;
               const isLoaded    = state?.posts !== undefined;
               const posts       = state?.posts || [];
-              const hasErr      = !!(state?.error) && state.error !== 'facebook_not_configured';
-              const fbNotConfigured = isFb && state?.error === 'facebook_not_configured';
+              const fbFallbackErrors = ['facebook_not_configured', 'facebook_returned_empty', 'facebook_login_failed'];
+              const fbFallback  = isFb && fbFallbackErrors.includes(state?.error);
+              const hasErr      = !!(state?.error) && !fbFallback;
               return (
                 <div key={acc.handle} className={`card ${isLoaded ? 'card-loaded' : 'card-idle'}`}>
                   <div className="card-head" onClick={() => onCardHeadClick(acc)}>
@@ -703,9 +704,9 @@ function App() {
 
                   {!isCollapsed && (
                     <div className="card-body">
-                      {fbNotConfigured && (
+                      {fbFallback && (
                         <div className="fb-notice">
-                          <span>FB غير مفعّل — أضف <code>FB_EMAIL</code> و <code>FB_PASSWORD</code> فى backend/.env</span>
+                          <span>Facebook بيمنع السحب الآلى — افتح الصفحة مباشرة</span>
                           <a
                             className="fb-link"
                             href={profileUrl(acc)}
@@ -714,7 +715,7 @@ function App() {
                         </div>
                       )}
                       {hasErr && <div className="card-err">⚠️ {state.error}</div>}
-                      {isLoaded && !hasErr && !fbNotConfigured && posts.length === 0 && (
+                      {isLoaded && !hasErr && !fbFallback && posts.length === 0 && (
                         <div className="empty">لا منشورات</div>
                       )}
                       {!isLoaded && !isLoading && (

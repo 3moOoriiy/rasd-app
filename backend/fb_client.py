@@ -106,12 +106,18 @@ def _build_driver():
     opts = EdgeOptions()
     opts.add_argument("--disable-notifications")
     opts.add_argument("--lang=ar")
-    opts.add_argument("--window-size=1280,900")
+    opts.add_argument("--window-size=1366,900")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
+    # Anti-detection: stop Edge from advertising itself as automated.
+    # FB serves a stripped-down DOM (empty article wrappers) to detected bots.
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    # Mobile UA so m.facebook.com doesn't redirect us back to desktop.
+    # Desktop FB serves a heavily-virtualized DOM (empty article wrappers
+    # when scraped); mobile FB returns plain HTML that's easy to parse.
     opts.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        "--user-agent=Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
     )
     if FB_HEADLESS:
         opts.add_argument("--headless=new")
@@ -124,6 +130,13 @@ def _build_driver():
     else:
         drv = webdriver.Edge(options=opts)
     drv.set_page_load_timeout(45)
+    # Wipe the webdriver flag that JS pages look for
+    try:
+        drv.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+        })
+    except Exception:
+        pass
     return drv
 
 
@@ -208,11 +221,21 @@ def _ensure_session():
 
 
 def _page_url(handle: str) -> str:
-    """Build the FB profile URL from a handle (slug or numeric id)."""
+    """Build the desktop FB profile URL (used for login + permalink resolution)."""
     h = handle.strip().lstrip("@")
     if h.isdigit():
         return f"https://www.facebook.com/profile.php?id={h}"
     return f"https://www.facebook.com/{h}"
+
+
+def _mobile_url(handle: str) -> str:
+    """Use mbasic.facebook.com — the legacy text-only mobile site. Serves
+    plain HTML with predictable structure even to bot-like clients, and
+    accepts the same .facebook.com session cookies we already saved."""
+    h = handle.strip().lstrip("@")
+    if h.isdigit():
+        return f"https://mbasic.facebook.com/profile.php?id={h}&v=timeline"
+    return f"https://mbasic.facebook.com/{h}"
 
 
 _AR_RELATIVE_DATE = re.compile(
@@ -271,21 +294,26 @@ def fetch_fb_posts(handle: str, limit: int = 5) -> dict:
             if not _ensure_session():
                 return {"error": "facebook_login_failed", "posts": []}
 
-            url = _page_url(handle)
+            # Use mobile FB — simpler HTML, less bot detection, same cookies.
+            url = _mobile_url(handle)
             try:
                 _DRIVER.get(url)
             except WebDriverException as e:
                 return {"error": f"navigation: {e}", "posts": []}
 
-            time.sleep(4)  # let the feed render
+            time.sleep(4)
+            for _ in range(max(3, limit)):
+                _DRIVER.execute_script("window.scrollBy(0, 1200);")
+                time.sleep(1.2)
+            _DRIVER.execute_script("window.scrollTo(0, 0);")
+            time.sleep(0.5)
 
-            # Scroll a few times to load more articles
-            for _ in range(max(2, limit)):
-                _DRIVER.execute_script("window.scrollBy(0, 1800);")
-                time.sleep(1.8)
 
             try:
-                articles = _DRIVER.find_elements(By.CSS_SELECTOR, 'div[role="article"]')
+                articles = _DRIVER.find_elements(
+                    By.CSS_SELECTOR,
+                    'article, div[data-ft], div[role="article"]'
+                )
             except Exception:
                 articles = []
 
@@ -293,7 +321,24 @@ def fetch_fb_posts(handle: str, limit: int = 5) -> dict:
             seen_texts = set()
             for art in articles:
                 try:
-                    raw = art.text or ""
+                    # FB wraps the article in an outer div whose .text is
+                    # sometimes empty. Build the caption by pulling text from
+                    # the typical post-body wrappers + dir="auto" spans inside.
+                    text_chunks = []
+                    for sel in (
+                        '[data-ad-comet-preview="message"]',
+                        '[data-ad-preview="message"]',
+                        '[data-testid="post_message"]',
+                        '[dir="auto"]',
+                    ):
+                        try:
+                            for el in art.find_elements(By.CSS_SELECTOR, sel):
+                                t = (el.text or "").strip()
+                                if t and t not in text_chunks:
+                                    text_chunks.append(t)
+                        except Exception:
+                            pass
+                    raw = "\n".join(text_chunks).strip() or (art.text or "").strip()
                     if not _looks_like_post(raw):
                         continue
                     caption = _clean_caption(raw)
@@ -304,7 +349,10 @@ def fetch_fb_posts(handle: str, limit: int = 5) -> dict:
                     # Try to find a permalink (timestamp link or "open story")
                     post_url = url
                     try:
-                        link_el = art.find_element(By.CSS_SELECTOR, 'a[href*="/posts/"], a[href*="/permalink/"], a[href*="story.php"]')
+                        link_el = art.find_element(
+                            By.CSS_SELECTOR,
+                            'a[href*="/posts/"], a[href*="/permalink/"], a[href*="story.php"], a[href*="/videos/"]',
+                        )
                         href = link_el.get_attribute("href") or ""
                         if href:
                             post_url = href.split("?")[0]
@@ -340,6 +388,8 @@ def fetch_fb_posts(handle: str, limit: int = 5) -> dict:
                 except Exception:
                     continue
 
+            if not posts:
+                return {"posts": [], "error": "facebook_returned_empty"}
             return {"posts": posts, "error": None}
 
         except WebDriverException as e:
