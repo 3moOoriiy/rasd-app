@@ -64,6 +64,44 @@ def list_sources(category: str | None = Query(None)):
     return {"sources": flatten(categories=cats)}
 
 
+# ---------------------- single-account fetch ----------------------
+@app.get("/api/account")
+def fetch_one_account(
+    handle: str = Query(..., description="X username or FB page slug/id"),
+    platform: str = Query("x", description="x | fb"),
+    per_account: int = Query(5, ge=1, le=20),
+    date_filter: str = Query("all", description="24h|3d|7d|30d|90d|all"),
+):
+    """Fetch one account's posts. Designed for on-demand click-to-load UX
+    instead of fanning out across all 41+ configured sources at once."""
+    handle = handle.strip().lstrip("@")
+    if not handle:
+        return {"error": "empty handle", "posts": []}
+
+    if date_filter not in ("24h", "3d", "7d", "30d", "90d", "all"):
+        date_filter = "all"
+
+    if platform == "fb":
+        # Facebook now blocks unauthenticated scraping at the platform level
+        # (both mbasic.facebook.com and www.facebook.com return error pages
+        # without a logged-in session). We surface a clear message so the
+        # UI can render a "open page" fallback.
+        return {
+            "handle": handle,
+            "platform": "fb",
+            "posts": [],
+            "error": "facebook_blocks_scraping",
+        }
+
+    res = fetch_user_tweets(handle, limit=per_account, date_filter=date_filter)
+    return {
+        "handle": handle,
+        "platform": "x",
+        "posts": res.get("posts") or [],
+        "error": res.get("error"),
+    }
+
+
 # ---------------------- aggregated feed ----------------------
 _FEED_CACHE = {}
 _FEED_TTL = 600  # 10 min

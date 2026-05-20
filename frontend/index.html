@@ -251,6 +251,22 @@
     .grid { grid-template-columns: 1fr; }
   }
 
+  /* ---------- Per-card idle / loading state ---------- */
+  .card-idle .card-head { background: linear-gradient(90deg, rgba(255,255,255,0.02), transparent); }
+  .card-loaded .card-head { background: linear-gradient(90deg, rgba(93,175,163,0.10), transparent); }
+  .load-hint {
+    font-size: 0.72rem; color: #64748b; padding: 0.18rem 0.5rem;
+    border: 1px dashed rgba(255,255,255,0.15); border-radius: 6px;
+    white-space: nowrap;
+  }
+  .card-spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(93,175,163,0.3); border-top-color: #5dafa3;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+
   /* ---------- Guest-mode banner ---------- */
   .guest-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 0.7rem;
@@ -359,7 +375,7 @@
 <div id="root"></div>
 
 <script type="text/babel" data-presets="env,react">
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 // When opened via FastAPI on :8765, API is same-origin. When opened as file://,
 // fall back to localhost.
@@ -419,27 +435,31 @@ const extractHandle = input => {
 
 function App() {
   const [cats, setCats]           = useState([]);
-  const [authMode, setAuthMode]   = useState('');     // 'cookies' | 'guest' | ''
+  const [authMode, setAuthMode]   = useState('');
   const [bannerDismissed, setBannerDismissed] = useState(
     () => localStorage.getItem('rasd_banner_dismissed') === '1'
   );
+  const [sources, setSources]     = useState([]);     // all configured accounts (no posts yet)
+  const [accountState, setAccountState] = useState({}); // handle -> { loading, posts, error, ts }
   const [activeCat, setActiveCat] = useState('all');
-  const [dateF, setDateF]         = useState('7d');
+  const [dateF, setDateF]         = useState('all');
   const [perAcc, setPerAcc]       = useState(5);
-  const [feed, setFeed]           = useState(null);
-  const [loading, setLoading]     = useState(false);
   const [err, setErr]             = useState('');
   const [q, setQ]                 = useState('');
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed, setCollapsed] = useState({});     // handle -> bool
 
+  // On mount: load categories + the full sources list. NO posts are fetched
+  // — every card starts idle. The user expands a card (or pastes a URL) to
+  // trigger a single-account fetch.
   useEffect(() => {
-    fetch(`${API_BASE}/api/categories`)
-      .then(r => r.json())
-      .then(d => {
-        setCats(d.categories || []);
-        setAuthMode(d.auth_mode || '');
-      })
-      .catch(() => setErr('تعذر الاتصال بالخادم — تأكد إن الـ backend شغّال'));
+    Promise.all([
+      fetch(`${API_BASE}/api/categories`).then(r => r.json()),
+      fetch(`${API_BASE}/api/sources`).then(r => r.json()),
+    ]).then(([catsRes, srcRes]) => {
+      setCats(catsRes.categories || []);
+      setAuthMode(catsRes.auth_mode || '');
+      setSources(srcRes.sources || []);
+    }).catch(() => setErr('تعذر الاتصال بالخادم — تأكد إن الـ backend شغّال'));
   }, []);
 
   const dismissBanner = () => {
@@ -447,46 +467,97 @@ function App() {
     localStorage.setItem('rasd_banner_dismissed', '1');
   };
 
-  const load = (force = false) => {
-    setLoading(true); setErr('');
+  // Fetch posts for one account on demand. Never auto-fanned-out across
+  // all configured sources — that's what triggered X rate limits.
+  const loadAccount = (acc) => {
+    if (!acc?.handle) return;
+    setAccountState(s => ({ ...s, [acc.handle]: { ...(s[acc.handle] || {}), loading: true, error: null } }));
     const params = new URLSearchParams({
-      per_account: String(perAcc),
-      date_filter: dateF,
-      ...(activeCat !== 'all' ? { category: activeCat } : {}),
-      ...(force ? { force: '1' } : {}),
+      handle: acc.handle, platform: acc.platform,
+      per_account: String(perAcc), date_filter: dateF,
     });
-    fetch(`${API_BASE}/api/feed?${params}`)
+    fetch(`${API_BASE}/api/account?${params}`)
       .then(r => r.json())
-      .then(d => { if (d.error) { setErr(d.error); setFeed(null); } else setFeed(d); })
-      .catch(() => setErr('فشل تحميل الأخبار — تأكد إن الـ backend شغّال على المنفذ 8765'))
-      .finally(() => setLoading(false));
+      .then(d => setAccountState(s => ({
+        ...s,
+        [acc.handle]: { loading: false, posts: d.posts || [], error: d.error || null, ts: Date.now() },
+      })))
+      .catch(() => setAccountState(s => ({
+        ...s,
+        [acc.handle]: { loading: false, posts: [], error: 'فشل الاتصال بالخادم', ts: Date.now() },
+      })));
   };
 
-  useEffect(() => { load(false); }, [activeCat, dateF, perAcc]);
+  // Re-fetch only the already-loaded cards when filter knobs change. Idle
+  // cards stay idle — the user might never want them loaded.
+  const reloadLoaded = () => {
+    Object.entries(accountState).forEach(([handle, st]) => {
+      if (st?.posts !== undefined && !st.loading) {
+        const acc = sources.find(s => s.handle === handle);
+        if (acc) loadAccount(acc);
+      }
+    });
+  };
+  // Sequence the reload via a ref so we don't re-run when accountState mutates
+  // during the loop itself.
+  const filtersRef = useRef({ dateF, perAcc });
+  useEffect(() => {
+    if (filtersRef.current.dateF !== dateF || filtersRef.current.perAcc !== perAcc) {
+      filtersRef.current = { dateF, perAcc };
+      reloadLoaded();
+    }
+  }, [dateF, perAcc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const totalPosts = useMemo(() => {
-    if (!feed) return 0;
-    return feed.accounts.reduce((s, a) => s + (a.posts?.length || 0), 0);
-  }, [feed]);
+  // URL-paste auto-load: when the user pastes a profile URL that exactly
+  // matches one of our sources, fetch it automatically.
+  useEffect(() => {
+    if (!q.trim() || !sources.length) return;
+    const fromUrl = extractHandle(q).toLowerCase();
+    if (!fromUrl) return;
+    const match = sources.find(s => s.handle.toLowerCase() === fromUrl);
+    if (match && !accountState[match.handle]) {
+      loadAccount(match);
+      setCollapsed(c => ({ ...c, [match.handle]: false }));
+    }
+  }, [q, sources]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = useMemo(() => {
-    if (!feed) return [];
-    if (!q.trim()) return feed.accounts;
+    let result = activeCat === 'all'
+      ? sources
+      : sources.filter(s => s.category === activeCat);
+    if (!q.trim()) return result;
     const rawNeedle = q.trim().toLowerCase();
     const fromUrl = extractHandle(q).toLowerCase();
-    return feed.accounts.filter(a => {
+    return result.filter(a => {
       const name   = (a.name_ar || '').toLowerCase();
       const handle = (a.handle  || '').toLowerCase();
       if (name.includes(rawNeedle))   return true;
       if (handle.includes(rawNeedle)) return true;
-      // URL paste: needle contains the handle (e.g. "x.com/jamaatwomen?...")
       if (handle && fromUrl === handle) return true;
       if (handle && rawNeedle.includes(handle)) return true;
-      return (a.posts || []).some(p => (p.caption || '').toLowerCase().includes(rawNeedle));
+      const posts = accountState[a.handle]?.posts || [];
+      return posts.some(p => (p.caption || '').toLowerCase().includes(rawNeedle));
     });
-  }, [feed, q]);
+  }, [sources, activeCat, q, accountState]);
+
+  const loadedCount = filtered.filter(a => accountState[a.handle]?.posts?.length).length;
+  const totalPosts = filtered.reduce(
+    (s, a) => s + (accountState[a.handle]?.posts?.length || 0),
+    0
+  );
 
   const totalAcc = cats.reduce((s, c) => s + c.count, 0);
+
+  // Click on card header: expand and load (if idle), or toggle (if loaded).
+  const onCardHeadClick = (acc) => {
+    const st = accountState[acc.handle];
+    if (!st || (st.posts === undefined && !st.loading)) {
+      loadAccount(acc);
+      setCollapsed(c => ({ ...c, [acc.handle]: false }));
+    } else {
+      setCollapsed(c => ({ ...c, [acc.handle]: !c[acc.handle] }));
+    }
+  };
 
   // ---------------------- Export helpers ----------------------
   const exportFileBase = () => {
@@ -506,12 +577,13 @@ function App() {
     for (const acc of filtered) {
       const accUrl = profileUrl(acc);
       const platform = acc.platform === 'x' ? 'X' : 'Facebook';
-      if (!(acc.posts && acc.posts.length)) {
+      const posts = accountState[acc.handle]?.posts || [];
+      if (!posts.length) {
         rows.push([acc.category_name_ar || '', acc.name_ar, acc.handle, platform, accUrl,
-                   '', '(لا منشورات)', 0, 0, 0, 0, '']);
+                   '', '(لم يُحمَّل)', 0, 0, 0, 0, '']);
         continue;
       }
-      for (const post of acc.posts) {
+      for (const post of posts) {
         rows.push([
           acc.category_name_ar || '',
           acc.name_ar, acc.handle, platform, accUrl,
@@ -555,12 +627,11 @@ function App() {
           </div>
         </div>
         <div className="top-stats">
-          {feed && <>
+          {sources.length > 0 && <>
             <span>📊 {filtered.length} حساب</span>
+            <span>✅ {loadedCount} محمَّل</span>
             <span>📝 {totalPosts} منشور</span>
-            <span>⏱ {feed.elapsed_sec}s</span>
-            {feed.cached && <span className="cached">💾 من الكاش</span>}
-            {filtered.length > 0 && (
+            {loadedCount > 0 && (
               <>
                 <button className="top-export top-export-csv" onClick={downloadCSV} title="تنزيل CSV">
                   📊 CSV
@@ -607,7 +678,7 @@ function App() {
           <input
             className="search"
             type="text"
-            placeholder="🔍 بحث فى الحسابات أو المنشورات..."
+            placeholder="🔍 الصق لينك حساب أو ابحث بالاسم..."
             value={q}
             onChange={e => setQ(e.target.value)}
           />
@@ -617,31 +688,31 @@ function App() {
           <select className="select" value={perAcc} onChange={e => setPerAcc(Number(e.target.value))}>
             {[3, 5, 10, 15, 20].map(n => <option key={n} value={n}>{n} منشور / حساب</option>)}
           </select>
-          <button className="btn" onClick={() => load(true)} disabled={loading}>
-            {loading ? '⏳' : '🔄'} تحديث
+          <button
+            className="btn"
+            onClick={() => reloadLoaded()}
+            disabled={loadedCount === 0}
+            title="إعادة تحميل الحسابات المفتوحة فقط"
+          >
+            🔄 تحديث المفتوح
           </button>
         </div>
 
         {err && <div className="err">⚠️ {err}</div>}
 
-        {loading && !feed && (
-          <div className="loading">
-            <div className="spinner"></div>
-            <p>جاري سحب الأخبار من المصادر...</p>
-            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>قد يستغرق 20-40 ثانية فى أول طلب</p>
-          </div>
-        )}
-
-        {feed && (
+        {sources.length > 0 && (
           <div className="grid">
             {filtered.map(acc => {
-              const isFb = acc.platform === 'fb';
+              const isFb        = acc.platform === 'fb';
               const isCollapsed = collapsed[acc.handle];
-              const hasErr = acc.error && acc.error !== 'facebook_link_only';
-              const toggle = () => setCollapsed(p => ({ ...p, [acc.handle]: !p[acc.handle] }));
+              const state       = accountState[acc.handle];
+              const isLoading   = !!state?.loading;
+              const isLoaded    = state?.posts !== undefined;
+              const posts       = state?.posts || [];
+              const hasErr      = !!(state?.error) && state.error !== 'facebook_blocks_scraping';
               return (
-                <div key={acc.handle} className="card">
-                  <div className="card-head" onClick={toggle}>
+                <div key={acc.handle} className={`card ${isLoaded ? 'card-loaded' : 'card-idle'}`}>
+                  <div className="card-head" onClick={() => onCardHeadClick(acc)}>
                     <div className="id">
                       <div className={`platform ${acc.platform}`}>
                         {acc.platform === 'x' ? '𝕏' : 'f'}
@@ -662,7 +733,11 @@ function App() {
                       </div>
                     </div>
                     <div className="meta-right">
-                      {(acc.posts?.length || 0) > 0 && <span className="count-badge">{acc.posts.length}</span>}
+                      {isLoading && <span className="card-spinner" />}
+                      {!isLoading && posts.length > 0 && <span className="count-badge">{posts.length}</span>}
+                      {!isLoading && !isLoaded && !isFb && (
+                        <span className="load-hint">⬇ اضغط للتحميل</span>
+                      )}
                       <span className="chevron">{isCollapsed ? '▸' : '▾'}</span>
                     </div>
                   </div>
@@ -671,19 +746,25 @@ function App() {
                     <div className="card-body">
                       {isFb && (
                         <div className="fb-notice">
-                          <span>صفحة Facebook — افتحها مباشرة</span>
+                          <span>Facebook بقى يمنع السحب — افتحها مباشرة</span>
                           <a
                             className="fb-link"
-                            href={`https://facebook.com/${acc.handle}`}
+                            href={profileUrl(acc)}
                             target="_blank" rel="noreferrer"
                           >🔗 فتح</a>
                         </div>
                       )}
-                      {hasErr && <div className="card-err">⚠️ {acc.error}</div>}
-                      {!isFb && !hasErr && (acc.posts?.length || 0) === 0 && (
+                      {hasErr && <div className="card-err">⚠️ {state.error}</div>}
+                      {!isFb && isLoaded && !hasErr && posts.length === 0 && (
                         <div className="empty">لا منشورات فى المدة المحددة</div>
                       )}
-                      {(acc.posts || []).map(p => (
+                      {!isFb && !isLoaded && !isLoading && (
+                        <div className="empty">اضغط على رأس الكارد لتحميل آخر منشورات هذا الحساب</div>
+                      )}
+                      {!isFb && isLoading && (
+                        <div className="empty">⏳ جارى التحميل...</div>
+                      )}
+                      {posts.map(p => (
                         <article key={p.id || p.post_url} className="post">
                           <p className="post-text">{truncate(p.caption, 320)}</p>
                           {p.image_urls && p.image_urls.length > 0 && (
