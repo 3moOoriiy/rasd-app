@@ -248,6 +248,89 @@
     .search { min-width: 100%; }
     .grid { grid-template-columns: 1fr; }
   }
+
+  /* ---------- Export bar (bottom of feed) ---------- */
+  .export-bar {
+    margin-top: 1.5rem;
+    padding: 1rem 1.2rem;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    display: flex; flex-wrap: wrap;
+    gap: 0.8rem; align-items: center;
+    justify-content: space-between;
+    backdrop-filter: blur(20px) saturate(150%);
+  }
+  .export-info { color: #cbd5e1; font-size: 0.9rem; font-weight: 600; }
+  .export-buttons { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  .export-btn {
+    background: rgba(255,255,255,0.06);
+    color: #e2e8f0;
+    border: 1px solid rgba(255,255,255,0.14);
+    padding: 0.55rem 1rem;
+    font-size: 0.9rem;
+    transition: background 0.15s, transform 0.15s;
+  }
+  .export-btn:hover { background: rgba(255,255,255,0.12); transform: translateY(-1px); }
+  .export-csv { border-color: rgba(34,197,94,0.4); color: #86efac; }
+  .export-csv:hover { background: rgba(34,197,94,0.12); }
+  .export-pdf { border-color: rgba(239,68,68,0.4); color: #fca5a5; }
+  .export-pdf:hover { background: rgba(239,68,68,0.12); }
+
+  /* ---------- Print stylesheet (PDF export) ---------- */
+  @media print {
+    @page { size: A4; margin: 1.2cm; }
+    body {
+      background: #fff !important; color: #000 !important;
+      background-image: none !important;
+    }
+    .top-bar, .tabs, .controls, .top-stats, .export-bar, .err, .loading,
+    .chevron, .fb-link {
+      display: none !important;
+    }
+    body::before {
+      content: "تقرير رصد المصادر — " attr(data-print-cat) " — " attr(data-print-date);
+      display: block;
+      text-align: center;
+      font-size: 16pt;
+      font-weight: 800;
+      padding-bottom: 10pt;
+      margin-bottom: 14pt;
+      border-bottom: 2px solid #5dafa3;
+      color: #0f172a;
+    }
+    .container { padding: 0 !important; max-width: 100% !important; }
+    .grid { display: block !important; }
+    .card {
+      background: #fff !important;
+      border: 1px solid #cbd5e1 !important;
+      box-shadow: none !important;
+      backdrop-filter: none !important;
+      page-break-inside: avoid;
+      margin-bottom: 10pt;
+    }
+    .card-head {
+      background: #f1f5f9 !important;
+      cursor: default !important;
+      border-bottom: 1px solid #cbd5e1 !important;
+    }
+    .id-name { color: #0f172a !important; font-size: 11pt; }
+    .id-handle, .id-url { color: #475569 !important; }
+    .id-url { text-decoration: none !important; }
+    .platform.x { background: #000 !important; color: #fff !important; }
+    .platform.fb { background: #1877f2 !important; color: #fff !important; }
+    .card-body { display: block !important; }
+    .post { border-bottom: 1px dashed #cbd5e1 !important; padding: 8pt 4pt; }
+    .post-text { color: #0f172a !important; font-size: 10.5pt; line-height: 1.7; }
+    .post-meta { color: #475569 !important; font-size: 9pt; }
+    .post-link { color: #1d4ed8 !important; }
+    .post-media img { max-height: 120pt; }
+    .count-badge { background: #5dafa3 !important; color: #fff !important; }
+    .fb-notice {
+      background: #eff6ff !important; color: #1e3a8a !important;
+      border: 1px solid #bfdbfe !important;
+    }
+  }
 </style>
 </head>
 <body>
@@ -370,6 +453,62 @@ function App() {
   }, [feed, q]);
 
   const totalAcc = cats.reduce((s, c) => s + c.count, 0);
+
+  // ---------------------- Export helpers ----------------------
+  const exportFileBase = () => {
+    const cat = cats.find(c => c.id === activeCat);
+    const catName = cat ? cat.name_ar : 'الكل';
+    return `rasd-${catName}-${new Date().toISOString().slice(0, 10)}`;
+  };
+
+  const downloadCSV = () => {
+    if (!filtered.length) return;
+    const headers = [
+      'الفئة', 'الحساب', 'اليوزر', 'المنصة', 'لينك البروفايل',
+      'تاريخ النشر', 'النص', 'إعجابات', 'إعادة تغريد', 'تعليقات', 'مشاهدات',
+      'لينك المنشور',
+    ];
+    const rows = [];
+    for (const acc of filtered) {
+      const accUrl = profileUrl(acc);
+      const platform = acc.platform === 'x' ? 'X' : 'Facebook';
+      if (!(acc.posts && acc.posts.length)) {
+        rows.push([acc.category_name_ar || '', acc.name_ar, acc.handle, platform, accUrl,
+                   '', '(لا منشورات)', 0, 0, 0, 0, '']);
+        continue;
+      }
+      for (const post of acc.posts) {
+        rows.push([
+          acc.category_name_ar || '',
+          acc.name_ar, acc.handle, platform, accUrl,
+          post.created_at || '',
+          post.caption || '',
+          post.likes || 0, post.retweets || 0, post.comments || 0, post.views || 0,
+          post.post_url || '',
+        ]);
+      }
+    }
+    const esc = c => `"${String(c).replace(/"/g, '""')}"`;
+    const BOM = String.fromCharCode(0xFEFF);  // Excel needs UTF-8 BOM to render Arabic
+    const csv = BOM + [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${exportFileBase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  };
+
+  const downloadPDF = () => {
+    // Expand all cards so they all print, then open the print dialog
+    setCollapsed({});
+    const cat = cats.find(c => c.id === activeCat);
+    document.body.setAttribute('data-print-cat', cat ? cat.name_ar : 'كل المصادر');
+    document.body.setAttribute('data-print-date', new Date().toLocaleDateString('ar-EG'));
+    // Two RAFs to ensure React re-rendered the expanded cards before printing
+    requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+  };
 
   return (
     <>
@@ -519,6 +658,22 @@ function App() {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {feed && filtered.length > 0 && (
+          <div className="export-bar">
+            <div className="export-info">
+              📥 تحميل التقرير ({filtered.reduce((s, a) => s + (a.posts?.length || 0), 0)} منشور · {filtered.length} حساب)
+            </div>
+            <div className="export-buttons">
+              <button className="btn export-btn export-csv" onClick={downloadCSV} title="تنزيل ملف Excel/Numbers بكل المنشورات">
+                📊 تصدير CSV
+              </button>
+              <button className="btn export-btn export-pdf" onClick={downloadPDF} title="فتح حوار الطباعة (اختر 'حفظ كـ PDF')">
+                📄 تصدير PDF
+              </button>
+            </div>
           </div>
         )}
       </div>

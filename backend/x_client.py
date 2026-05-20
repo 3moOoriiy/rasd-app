@@ -378,5 +378,8 @@ def fetch_user_tweets(screen_name, limit=5, date_filter="7d"):
         print(f"[x_client] parse error for @{screen_name}: {e}")
 
     payload = {"posts": posts, "error": None}
-    _cache_set(_TWEETS_CACHE, cache_key, payload)
+    if posts:
+        # Only cache non-empty results — caching empty hides transient
+        # rate-limits and parse failures for the full 15-min TTL.
+        _cache_set(_TWEETS_CACHE, cache_key, payload)
     return payload
